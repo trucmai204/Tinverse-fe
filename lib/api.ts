@@ -3,6 +3,30 @@ import { Agent } from "https"
 import { SearchFormData, SearchResponse, ApiError, Article, RawArticle, Category, RawCategory, RawArticleDetail, ArticleDetail, User, LoginDto, LoginResponse, RegisterUserDto, UpdateUserProfileDto, ChangePasswordDto, Comment, AddCommentDto, UpdateCommentDto, CommentResponse, PaginationParams, PaginatedResponse, CreateArticleDto, UpdateArticleDto } from "./types"
 import { storage } from "./storage"
 
+// Interface cho error handling
+interface ApiErrorResponse {
+  message?: string;
+  error?: string;
+  statusCode?: number;
+}
+
+// Khai báo kiểu cụ thể cho các error
+type ErrorWithMessage = Error & {
+  message: string;
+  constructor: { name: string };
+};
+
+// Helper function để type checking cho error
+function isErrorWithMessage(error: unknown): error is ErrorWithMessage {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof (error as Record<string, unknown>).message === 'string' &&
+    'constructor' in error
+  );
+}
+
 const getBaseUrl = () => {
   const url = process.env.NEXT_PUBLIC_API_URL || "https://localhost:5003/api"
   console.log('API Base URL:', url)
@@ -166,7 +190,7 @@ export async function getFeaturedArticles(pagination: PaginationParams = { page:
       totalPages,
       currentPage: page
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.timeEnd('getFeaturedArticles:total')
     
     if (axios.isAxiosError(err)) {
@@ -180,11 +204,13 @@ export async function getFeaturedArticles(pagination: PaginationParams = { page:
       }
       console.error('Error in getFeaturedArticles:', {
         status: err.response?.status,
-        data: err.response?.data,
+        data: err.response?.data as ApiErrorResponse,
         message: err.message
       })
+    } else if (isErrorWithMessage(err)) {
+      console.error('Error in getFeaturedArticles:', err.message)
     } else {
-      console.error('Error in getFeaturedArticles:', err instanceof Error ? err.message : String(err))
+      console.error('Error in getFeaturedArticles:', String(err))
     }
 
     // Return empty state instead of throwing
@@ -274,19 +300,14 @@ export async function searchArticles({
         totalPages,
         currentPage: page
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.timeEnd('searchArticles:api')
       console.timeEnd('searchArticles:total')
       
-      // Log lỗi chi tiết hơn
-      if (axios.isAxiosError(err)) {
-        console.error('searchArticles: API error:', {
-          status: err.response?.status,
-          data: err.response?.data,
-          message: err.message
-        })
+      if (isErrorWithMessage(err)) {
+        console.error('searchArticles: Error in outer try-catch:', err.message)
       } else {
-        console.error('searchArticles: Unknown error:', err instanceof Error ? err.message : String(err))
+        console.error('searchArticles: Unknown error type:', String(err))
       }
       
       // Xử lý trường hợp lỗi - trả về dữ liệu trống thay vì throw
@@ -297,9 +318,14 @@ export async function searchArticles({
         currentPage: page
       }
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.timeEnd('searchArticles:total')
-    console.error('searchArticles: Error in outer try-catch:', err instanceof Error ? err.message : String(err))
+    
+    if (isErrorWithMessage(err)) {
+      console.error('searchArticles: Error in outer try-catch:', err.message)
+    } else {
+      console.error('searchArticles: Unknown error type:', String(err))
+    }
     
     // Trả về dữ liệu trống để tránh crash ứng dụng
     return {
@@ -906,14 +932,20 @@ export async function getBookmarkedArticles(pagination: PaginationParams = { pag
         currentPage: page
       }
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.timeEnd('getBookmarkedArticles:total')
-    console.error('Error in getBookmarkedArticles:', {
-      type: err.constructor.name,
-      message: err.message,
-      status: axios.isAxiosError(err) ? err.response?.status : null,
-      data: axios.isAxiosError(err) ? err.response?.data : null
-    })
+    
+    if (isErrorWithMessage(err)) {
+      console.error('Error in getBookmarkedArticles:', {
+        type: err.constructor.name,
+        message: err.message,
+        status: axios.isAxiosError(err) ? err.response?.status : null,
+        data: axios.isAxiosError(err) ? err.response?.data as ApiErrorResponse : null
+      })
+    } else {
+      console.error('Error in getBookmarkedArticles: Unknown error type:', String(err))
+    }
+    
     if (axios.isAxiosError(err)) {
       if (err.response?.status === 404) {
         return {
@@ -924,11 +956,11 @@ export async function getBookmarkedArticles(pagination: PaginationParams = { pag
         }
       }
       throw new Error(
-        (err.response?.data as ApiError)?.message ||
+        ((err.response?.data as ApiErrorResponse)?.message) ||
           "Có lỗi xảy ra khi tải danh sách bookmark."
       )
     }
-    throw err
+    throw new Error("Có lỗi xảy ra khi tải danh sách bookmark.")
   }
 }
 
