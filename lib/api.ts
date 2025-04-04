@@ -113,6 +113,7 @@ export function transformArticleResponseDates<T extends { [key: string]: any }>(
 
 export async function getFeaturedArticles(pagination: PaginationParams = { page: 1, itemsPerPage: 10 }): Promise<PaginatedResponse<Article>> {
   const { page = 1, itemsPerPage = 10 } = pagination
+  console.time('getFeaturedArticles:total')
   
   const params = new URLSearchParams({
     page: page.toString(),
@@ -120,18 +121,14 @@ export async function getFeaturedArticles(pagination: PaginationParams = { page:
   })
 
   try {
-      console.log('Fetching featured articles:', { params })
-      const response = await api.get(`/Articles/GetFeatured?${params}`)
-      const { data } = response
-  
-      console.log('Featured articles response:', {
-        hasData: !!data,
-        isArray: Array.isArray(data),
-        itemCount: Array.isArray(data) ? data.length : data?.Items?.length
-      })
-  
-      if (!data) {
-        console.warn('No data returned from API')
+    console.time('getFeaturedArticles:api')
+    const response = await api.get(`/Articles/GetFeatured?${params}`)
+    const { data } = response
+    console.timeEnd('getFeaturedArticles:api')
+
+    if (!data) {
+      console.warn('No data returned from API')
+      console.timeEnd('getFeaturedArticles:total')
       return {
         items: [],
         totalItems: 0,
@@ -140,32 +137,40 @@ export async function getFeaturedArticles(pagination: PaginationParams = { page:
       }
     }
 
-    // Check if the response is an array (old API format) or paginated object (new format)
+    console.time('getFeaturedArticles:process')
+    let items: Article[] = []
+    let totalItems = 0
+    let totalPages = 0
+
+    // Xử lý dữ liệu
     if (Array.isArray(data)) {
       const articles = data.map(transformArticle)
       const startIndex = (page - 1) * itemsPerPage
       const endIndex = Math.min(startIndex + itemsPerPage, articles.length)
-      const paginatedArticles = articles.slice(startIndex, endIndex)
       
-      return {
-        items: paginatedArticles,
-        totalItems: articles.length,
-        totalPages: Math.ceil(articles.length / itemsPerPage),
-        currentPage: page
-      }
-    } else {
-      const articles = data.Items.map(transformArticle)
-      
-      return {
-        items: articles,
-        totalItems: data.TotalItems,
-        totalPages: data.TotalPages,
-        currentPage: data.CurrentPage
-      }
+      items = articles.slice(startIndex, endIndex)
+      totalItems = articles.length
+      totalPages = Math.ceil(articles.length / itemsPerPage)
+    } else if (data.Items && Array.isArray(data.Items)) {
+      items = data.Items.map(transformArticle)
+      totalItems = data.TotalItems || items.length
+      totalPages = data.TotalPages || Math.ceil(items.length / itemsPerPage)
     }
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
-      if (error.response?.status === 404) {
+    
+    console.timeEnd('getFeaturedArticles:process')
+    console.timeEnd('getFeaturedArticles:total')
+    
+    return {
+      items,
+      totalItems,
+      totalPages,
+      currentPage: page
+    }
+  } catch (err: any) {
+    console.timeEnd('getFeaturedArticles:total')
+    
+    if (axios.isAxiosError(err)) {
+      if (err.response?.status === 404) {
         return {
           items: [],
           totalItems: 0,
@@ -173,12 +178,14 @@ export async function getFeaturedArticles(pagination: PaginationParams = { page:
           currentPage: page
         }
       }
+      console.error('Error in getFeaturedArticles:', {
+        status: err.response?.status,
+        data: err.response?.data,
+        message: err.message
+      })
+    } else {
+      console.error('Error in getFeaturedArticles:', err instanceof Error ? err.message : String(err))
     }
-    
-    console.error('Error fetching featured articles:', {
-      url: error instanceof Error ? error.message : 'Unknown error',
-      timestamp: new Date().toISOString()
-    })
 
     // Return empty state instead of throwing
     return {
@@ -195,147 +202,112 @@ export async function searchArticles({
   categoryId,
 }: SearchFormData, pagination: PaginationParams = { page: 1, itemsPerPage: 10 }): Promise<PaginatedResponse<Article>> {
   try {
+    console.time('searchArticles:total')
     const { page = 1, itemsPerPage = 10 } = pagination
     
-    console.log('searchArticles: Executing search with params:', { 
-      keyword, 
-      categoryId, 
-      hasCategory: categoryId !== undefined, 
-      categoryIdType: typeof categoryId,
-      categoryIdNumber: Number.isInteger(categoryId),
-      page, 
-      itemsPerPage 
-    })
+    // Log ngắn gọn hơn
+    console.log('searchArticles: Params:', { keyword, categoryId, page, itemsPerPage })
     
-    // Reset cấu trúc params để tránh lỗi
+    // Tối ưu xử lý params
     const params = new URLSearchParams()
     
-    // Thêm các tham số tìm kiếm
-    params.append('keyword', keyword || '')
+    if (keyword) params.append('keyword', keyword)
     params.append('page', page.toString())
     params.append('itemsPerPage', itemsPerPage.toString())
     
-    // Thêm categoryId vào params nếu có
-    if (categoryId !== undefined) {
-      console.log('searchArticles: Adding categoryId to params:', categoryId, 'as string:', categoryId.toString());
-      params.append('categoryId', categoryId.toString());
+    if (categoryId !== undefined && categoryId !== null) {
+      params.append('categoryId', categoryId.toString())
     }
 
     try {
-      console.log('searchArticles: API request URL params:', params.toString());
+      console.time('searchArticles:api')
       const { data } = await api.get(`/Articles/Search?${params}`)
-      console.log('searchArticles: API response:', { 
-        isArray: Array.isArray(data),
-        hasItems: data?.Items ? true : false,
-        length: Array.isArray(data) ? data.length : (data?.Items?.length || 0)
-      })
+      console.timeEnd('searchArticles:api')
       
-      // Mảng kết quả cuối cùng
-      let finalResponse: PaginatedResponse<Article>;
+      // Xử lý response nhanh hơn
+      console.time('searchArticles:process')
+      let items: Article[] = []
+      let totalItems = 0
+      let totalPages = 0
       
-      // Xử lý kết quả trả về là mảng
+      // Phân tích dữ liệu trả về
       if (Array.isArray(data) && data.length > 0) {
+        // Trường hợp response là mảng
         const articles = data.map(transformArticle)
-        
-        // Phân trang dữ liệu
         const startIndex = (page - 1) * itemsPerPage
         const endIndex = Math.min(startIndex + itemsPerPage, articles.length)
-        const paginatedArticles = articles.slice(startIndex, endIndex)
         
-        finalResponse = {
-          items: paginatedArticles,
-          totalItems: articles.length,
-          totalPages: Math.ceil(articles.length / itemsPerPage),
-          currentPage: page
-        }
+        items = articles.slice(startIndex, endIndex)
+        totalItems = articles.length
+        totalPages = Math.ceil(totalItems / itemsPerPage)
       } 
-      // Xử lý kết quả trả về là đối tượng có Items
       else if (data?.Items && Array.isArray(data.Items) && data.Items.length > 0) {
-        const articles = data.Items.map(transformArticle)
-        
-        finalResponse = {
-          items: articles,
-          totalItems: data.TotalItems || articles.length, 
-          totalPages: data.TotalPages || Math.ceil(articles.length / itemsPerPage),
-          currentPage: data.CurrentPage || page
-        }
-      } 
-      // Trường hợp không có dữ liệu, tạo dữ liệu mẫu đơn giản hơn
+        // Trường hợp response có cấu trúc Items
+        items = data.Items.map(transformArticle)
+        totalItems = data.TotalItems || items.length
+        totalPages = data.TotalPages || Math.ceil(totalItems / itemsPerPage)
+      }
       else {
-        console.log('searchArticles: Không có dữ liệu từ API, tạo dữ liệu mẫu đơn giản');
-        
-        // Chỉ tạo dữ liệu mẫu cho trang hiện tại, không phải toàn bộ
-        const mockArticles: Article[] = [];
-        const articlesCount = page === 1 ? itemsPerPage : Math.max(0, Math.min(itemsPerPage, 5));
-        
-        for (let i = 0; i < articlesCount; i++) {
-          const index = (page - 1) * itemsPerPage + i;
-          const title = keyword 
-            ? `Bài viết về ${keyword} - ${index + 1}` 
-            : `Bài viết mẫu ${index + 1}`;
-            
-          mockArticles.push({
-            id: 1000 + index,
-            title: title,
-            thumbnailUrl: `https://picsum.photos/seed/mock-${index + 1}/600/400`,
+        // Tối ưu việc tạo mock data khi không có dữ liệu
+        if (page === 1 && (!keyword || keyword.trim() === '')) {
+          // Chỉ tạo data mẫu cho trang 1 và không có từ khóa tìm kiếm
+          const mockCount = Math.min(itemsPerPage, 5)
+          items = Array.from({ length: mockCount }, (_, i) => ({
+            id: 1000 + i,
+            title: `Bài viết mẫu ${i + 1}`,
+            thumbnailUrl: `https://picsum.photos/seed/mock-${i + 1}/600/400`,
             lastUpdatedTime: new Date().toISOString(),
             category: "Danh mục chung",
             author: "Tác giả ẩn danh",
-          });
-        }
-        
-        finalResponse = {
-          items: mockArticles,
-          totalItems: page === 1 ? 20 : mockArticles.length, // Giảm số lượng tổng
-          totalPages: page === 1 ? 3 : page, // Giảm số trang cho đơn giản
-          currentPage: page
+          }))
+          totalItems = mockCount
+          totalPages = 1
         }
       }
       
-      console.log('searchArticles: Returning response:', {
-        itemCount: finalResponse.items.length,
-        totalItems: finalResponse.totalItems,
-        totalPages: finalResponse.totalPages,
-        currentPage: finalResponse.currentPage
-      });
-    
-      return finalResponse;
-    } catch (error) {
-      console.error('searchArticles: API call failed:', error)
-      throw error;
+      console.timeEnd('searchArticles:process')
+      console.timeEnd('searchArticles:total')
+      
+      return {
+        items,
+        totalItems,
+        totalPages,
+        currentPage: page
+      }
+    } catch (err: any) {
+      console.timeEnd('searchArticles:api')
+      console.timeEnd('searchArticles:total')
+      
+      // Log lỗi chi tiết hơn
+      if (axios.isAxiosError(err)) {
+        console.error('searchArticles: API error:', {
+          status: err.response?.status,
+          data: err.response?.data,
+          message: err.message
+        })
+      } else {
+        console.error('searchArticles: Unknown error:', err instanceof Error ? err.message : String(err))
+      }
+      
+      // Xử lý trường hợp lỗi - trả về dữ liệu trống thay vì throw
+      return {
+        items: [],
+        totalItems: 0,
+        totalPages: 0,
+        currentPage: page
+      }
     }
-  } catch (error) {
-    console.error('searchArticles: Error occurred:', error)
+  } catch (err: any) {
+    console.timeEnd('searchArticles:total')
+    console.error('searchArticles: Error in outer try-catch:', err instanceof Error ? err.message : String(err))
     
-    // Dữ liệu mẫu đơn giản hơn khi có lỗi
-    const mockArticles: Article[] = [];
-    const { page = 1, itemsPerPage = 10 } = pagination;
-    
-    // Chỉ tạo dữ liệu cho trang hiện tại
-    const count = page === 1 ? itemsPerPage : Math.min(5, itemsPerPage);
-    
-    for (let i = 0; i < count; i++) {
-      const index = (page - 1) * itemsPerPage + i;
-      mockArticles.push({
-        id: 1000 + index,
-        title: keyword ? `Bài viết về ${keyword} - ${index + 1}` : `Bài viết mẫu ${index + 1}`,
-        thumbnailUrl: `https://picsum.photos/seed/error-${index + 1}/600/400`,
-        lastUpdatedTime: new Date().toISOString(),
-        category: "Danh mục chung",
-        author: "Tác giả ẩn danh",
-      });
+    // Trả về dữ liệu trống để tránh crash ứng dụng
+    return {
+      items: [],
+      totalItems: 0,
+      totalPages: 0,
+      currentPage: pagination.page || 1
     }
-    
-    const finalResponse = {
-      items: mockArticles,
-      totalItems: 15, // Ít hơn
-      totalPages: 2,  // Ít hơn
-      currentPage: page
-    };
-    
-    console.log('searchArticles: Returning minimal mock response after error');
-    
-    return finalResponse;
   }
 }
 
@@ -934,16 +906,16 @@ export async function getBookmarkedArticles(pagination: PaginationParams = { pag
         currentPage: page
       }
     }
-  } catch (error) {
+  } catch (err: any) {
     console.timeEnd('getBookmarkedArticles:total')
     console.error('Error in getBookmarkedArticles:', {
-      type: error.constructor.name,
-      message: error.message,
-      status: axios.isAxiosError(error) ? error.response?.status : null,
-      data: axios.isAxiosError(error) ? error.response?.data : null
+      type: err.constructor.name,
+      message: err.message,
+      status: axios.isAxiosError(err) ? err.response?.status : null,
+      data: axios.isAxiosError(err) ? err.response?.data : null
     })
-    if (axios.isAxiosError(error)) {
-      if (error.response?.status === 404) {
+    if (axios.isAxiosError(err)) {
+      if (err.response?.status === 404) {
         return {
           items: [],
           totalItems: 0,
@@ -952,11 +924,11 @@ export async function getBookmarkedArticles(pagination: PaginationParams = { pag
         }
       }
       throw new Error(
-        (error.response?.data as ApiError)?.message ||
+        (err.response?.data as ApiError)?.message ||
           "Có lỗi xảy ra khi tải danh sách bookmark."
       )
     }
-    throw error
+    throw err
   }
 }
 
