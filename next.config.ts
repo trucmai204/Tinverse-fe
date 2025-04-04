@@ -11,12 +11,20 @@ const nextConfig: NextConfig = {
   },
   // Add server configuration
   async rewrites() {
-    return [
-      {
-        source: '/api/:path*',
-        destination: `${process.env.NEXT_PUBLIC_API_URL}/:path*`,
-      },
-    ]
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+    
+    // Chỉ trả về rewrite khi biến môi trường tồn tại
+    if (apiUrl) {
+      return [
+        {
+          source: '/api/:path*',
+          destination: `${apiUrl}/:path*`,
+        },
+      ];
+    }
+    
+    // Trả về mảng rỗng nếu không có biến môi trường
+    return [];
   },
 };
 
